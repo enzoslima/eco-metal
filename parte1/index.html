@@ -1,0 +1,2237 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eco de Metal - Survival Horror</title>
+<style>
+@font-face {
+  font-family: 'PixelFont';
+  src: local('Courier New'), local('Consolas'), local('monospace');
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  overflow: hidden;
+  font-family: 'Courier New', monospace;
+}
+canvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  border: 3px solid #1a0a0a;
+  box-shadow: 0 0 20px rgba(100, 0, 0, 0.3);
+}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+const W = 400;
+const H = 300;
+canvas.width = W;
+canvas.height = H;
+
+function resizeCanvas() {
+  const scaleX = window.innerWidth / W;
+  const scaleY = window.innerHeight / H;
+  const scale = Math.min(scaleX, scaleY) * 0.95;
+  canvas.style.width = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ============ IMPROVED TEXT RENDERING ============
+const TextRenderer = {
+  drawText(text, x, y, options = {}) {
+    const {
+      size = 12,
+      color = '#ffffff',
+      shadow = true,
+      shadowColor = '#000000',
+      shadowOffset = 1,
+      outline = false,
+      outlineColor = '#000000',
+      align = 'left',
+      bold = false
+    } = options;
+    
+    ctx.font = `${bold ? 'bold ' : ''}${size}px "Courier New", monospace`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = align;
+    
+    // Shadow for depth
+    if (shadow) {
+      ctx.fillStyle = shadowColor;
+      ctx.fillText(text, x + shadowOffset, y + shadowOffset);
+    }
+    
+    // Outline for better visibility
+    if (outline) {
+      ctx.strokeStyle = outlineColor;
+      ctx.lineWidth = 2;
+      ctx.strokeText(text, x, y);
+    }
+    
+    // Main text
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  },
+  
+  drawTextBox(text, x, y, options = {}) {
+    const {
+      size = 12,
+      color = '#ffffff',
+      bgColor = 'rgba(0, 0, 0, 0.8)',
+      padding = 6,
+      borderColor = null
+    } = options;
+    
+    ctx.font = `${size}px "Courier New", monospace`;
+    const metrics = ctx.measureText(text);
+    const textWidth = metrics.width;
+    const textHeight = size;
+    
+    // Background box
+    const boxX = x - padding;
+    const boxY = y - textHeight/2 - padding;
+    const boxW = textWidth + padding * 2;
+    const boxH = textHeight + padding * 2;
+    
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    
+    if (borderColor) {
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(boxX, boxY, boxW, boxH);
+    }
+    
+    ctx.fillStyle = color;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillText(text, x, y);
+  }
+};
+
+// ============ IMPROVED PLAYER MOVEMENT ============
+const PlayerController = {
+  // Physics properties
+  vx: 0,
+  vy: 0,
+  targetVx: 0,
+  targetVy: 0,
+  
+  // Movement settings
+  maxSpeed: 2.0,
+  sprintSpeed: 3.2,
+  acceleration: 0.25,
+  deceleration: 0.18,
+  
+  // Animation
+  walkCycle: 0,
+  direction: 0, // 0=right, 1=down, 2=left, 3=up
+  isMoving: false,
+  
+  update(player, keys) {
+    // Get input direction
+    let inputX = 0;
+    let inputY = 0;
+    
+    if (keys['ArrowLeft'] || keys['KeyA']) inputX -= 1;
+    if (keys['ArrowRight'] || keys['KeyD']) inputX += 1;
+    if (keys['ArrowUp'] || keys['KeyW']) inputY -= 1;
+    if (keys['ArrowDown'] || keys['KeyS']) inputY += 1;
+    
+    // Normalize diagonal movement
+    if (inputX !== 0 && inputY !== 0) {
+      inputX *= 0.707;
+      inputY *= 0.707;
+    }
+    
+    // Determine speed
+    const isSprinting = (keys['ShiftLeft'] || keys['ShiftRight']) && player.stamina > 0;
+    const speed = isSprinting ? this.sprintSpeed : this.maxSpeed;
+    
+    // Handle stamina
+    if (isSprinting && (inputX !== 0 || inputY !== 0)) {
+      player.stamina = Math.max(0, player.stamina - 0.4);
+    } else if (!isSprinting) {
+      player.stamina = Math.min(player.maxStamina, player.stamina + 0.15);
+    }
+    
+    // Set target velocity
+    this.targetVx = inputX * speed;
+    this.targetVy = inputY * speed;
+    
+    // Smooth acceleration/deceleration
+    if (inputX !== 0 || inputY !== 0) {
+      // Accelerate toward target
+      this.vx += (this.targetVx - this.vx) * this.acceleration;
+      this.vy += (this.targetVy - this.vy) * this.acceleration;
+      this.isMoving = true;
+    } else {
+      // Decelerate to stop
+      this.vx *= (1 - this.deceleration);
+      this.vy *= (1 - this.deceleration);
+      
+      // Stop completely when very slow
+      if (Math.abs(this.vx) < 0.05) this.vx = 0;
+      if (Math.abs(this.vy) < 0.05) this.vy = 0;
+      
+      this.isMoving = Math.abs(this.vx) > 0.1 || Math.abs(this.vy) > 0.1;
+    }
+    
+    // Update direction for animation
+    if (Math.abs(this.vx) > 0.3 || Math.abs(this.vy) > 0.3) {
+      const angle = Math.atan2(this.vy, this.vx);
+      if (angle > -Math.PI/4 && angle <= Math.PI/4) this.direction = 0; // Right
+      else if (angle > Math.PI/4 && angle <= 3*Math.PI/4) this.direction = 1; // Down
+      else if (angle > -3*Math.PI/4 && angle <= -Math.PI/4) this.direction = 3; // Up
+      else this.direction = 2; // Left
+    }
+    
+    // Walk cycle animation
+    if (this.isMoving) {
+      const animSpeed = isSprinting ? 0.25 : 0.15;
+      this.walkCycle += animSpeed * Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+    } else {
+      // Smoothly return to standing pose
+      this.walkCycle *= 0.8;
+    }
+    
+    // Apply velocity to position
+    player.x += this.vx;
+    player.y += this.vy;
+    
+    return { isSprinting, isMoving: this.isMoving };
+  },
+  
+  // Get animation frame info
+  getAnimationState() {
+    return {
+      walkCycle: this.walkCycle,
+      direction: this.direction,
+      isMoving: this.isMoving,
+      bobY: Math.sin(this.walkCycle) * (this.isMoving ? 1.5 : 0),
+      legOffset: Math.sin(this.walkCycle * 2) * (this.isMoving ? 3 : 0),
+      armSwing: Math.sin(this.walkCycle * 2) * (this.isMoving ? 8 : 0)
+    };
+  },
+  
+  reset() {
+    this.vx = 0;
+    this.vy = 0;
+    this.targetVx = 0;
+    this.targetVy = 0;
+    this.walkCycle = 0;
+    this.direction = 0;
+    this.isMoving = false;
+  }
+};
+
+// ============ AUDIO SYSTEM ============
+const AudioSystem = {
+  ctx: null,
+  
+  init() {
+    try {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch(e) {}
+  },
+  
+  unlock() {
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+  },
+  
+  playTone(freq, duration, type = 'square', volume = 0.1) {
+    if (!this.ctx) return;
+    try {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      gain.gain.value = volume;
+      gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start();
+      osc.stop(this.ctx.currentTime + duration);
+    } catch(e) {}
+  },
+  
+  playFootstep() {
+    this.playTone(60 + Math.random() * 30, 0.06, 'square', 0.03);
+  },
+  
+  playCollect() {
+    this.playTone(523, 0.1, 'square', 0.08);
+    setTimeout(() => this.playTone(659, 0.1, 'square', 0.08), 80);
+    setTimeout(() => this.playTone(784, 0.12, 'square', 0.08), 160);
+  },
+  
+  playAlert() {
+    this.playTone(220, 0.15, 'sawtooth', 0.1);
+    setTimeout(() => this.playTone(330, 0.15, 'sawtooth', 0.1), 100);
+  },
+  
+  playChase() {
+    for (let i = 0; i < 4; i++) {
+      setTimeout(() => this.playTone(400 + i * 100, 0.12, 'sawtooth', 0.08), i * 70);
+    }
+  },
+  
+  playDamage() {
+    this.playTone(80, 0.3, 'sawtooth', 0.15);
+  },
+  
+  playFlare() {
+    this.playTone(120, 0.4, 'sawtooth', 0.12);
+  },
+  
+  playHeartbeat() {
+    this.playTone(55, 0.12, 'sine', 0.06);
+    setTimeout(() => this.playTone(45, 0.18, 'sine', 0.05), 120);
+  }
+};
+
+// ============ GAME STATE ============
+const STATE = { TITLE: 0, INTRO: 1, GAME: 2, CHASE: 3, PAUSE: 4, DEATH: 5, WIN: 6 };
+const MAP_W = 1400;
+const MAP_H = 700;
+
+let gameState = STATE.TITLE;
+let player, deer, camera;
+let keys = {};
+let items, flashlight;
+let trees = [], cabins = [], carParts = [], hideSpots = [];
+let workshop, escapeCar;
+let rain = [], fogParticles = [];
+let textTimer = 0, currentText = '';
+let gameTimer = 0, introStep = 0, introTimer = 0;
+let deathTimer = 0, winTimer = 0;
+let screenShake = 0, vhsGlitch = 0;
+let lightningTimer = 0, lightningFlash = 0;
+let flareActive = false, flareTimer = 0, flareX = 0, flareY = 0;
+let titleSelect = 0, pauseSelect = 0;
+let footstepTimer = 0;
+let heartbeatTimer = 0;
+let batteries = [], extraFlares = [], traps = [];
+
+// ============ INITIALIZATION ============
+function init() {
+  player = {
+    x: 180, y: 220,
+    hiding: false,
+    hp: 3, maxHp: 3,
+    stamina: 100, maxStamina: 100,
+    invincible: 0
+  };
+  
+  deer = {
+    x: 950, y: 350,
+    frame: 0,
+    speed: 0.5,
+    mode: 'patrol',
+    eyeColor: '#ffcc00',
+    stunTimer: 0,
+    patrolTimer: 0,
+    patrolDir: Math.random() * Math.PI * 2,
+    alertLevel: 0,
+    lastKnownX: 0,
+    lastKnownY: 0
+  };
+  
+  camera = { x: 0, y: 0 };
+  items = { flares: 2, carParts: 0, totalParts: 4 };
+  flashlight = { on: true, battery: 100 };
+  
+  PlayerController.reset();
+  flareActive = false;
+  screenShake = 0;
+  gameTimer = 0;
+  
+  generateWorld();
+}
+
+function generateWorld() {
+  // Trees
+  trees = [];
+  for (let i = 0; i < 140; i++) {
+    let tx = Math.random() * MAP_W;
+    let ty = Math.random() * MAP_H;
+    if (tx < 220 && ty < 280) continue;
+    if (tx > 820 && tx < 1020 && ty > 80 && ty < 250) continue;
+    if (tx > 1020 && tx < 1180 && ty > 260 && ty < 420) continue;
+    trees.push({
+      x: tx, y: ty,
+      h: 30 + Math.random() * 40,
+      type: Math.floor(Math.random() * 3),
+      sway: Math.random() * Math.PI * 2
+    });
+  }
+  
+  // Rain
+  rain = [];
+  for (let i = 0; i < 100; i++) {
+    rain.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      speed: 3 + Math.random() * 3,
+      len: 5 + Math.random() * 7
+    });
+  }
+  
+  // Fog
+  fogParticles = [];
+  for (let i = 0; i < 35; i++) {
+    fogParticles.push({
+      x: Math.random() * MAP_W,
+      y: Math.random() * MAP_H,
+      r: 30 + Math.random() * 50,
+      alpha: 0.03 + Math.random() * 0.06,
+      dx: (Math.random() - 0.5) * 0.2
+    });
+  }
+  
+  // Cabins
+  cabins = [
+    { x: 100, y: 100, w: 60, h: 50, name: 'Cabana Norte' },
+    { x: 380, y: 500, w: 60, h: 50, name: 'Cabana Sul' },
+    { x: 750, y: 550, w: 60, h: 50, name: 'Cabana Leste' },
+    { x: 1250, y: 200, w: 60, h: 50, name: 'Refúgio' }
+  ];
+  hideSpots = cabins.map(c => ({
+    x: c.x + 15, y: c.y + 25, w: 30, h: 20, cabin: c
+  }));
+  
+  workshop = { x: 870, y: 130, w: 120, h: 80 };
+  escapeCar = { x: 1100, y: 340 };
+  
+  // Car parts
+  carParts = [
+    { x: 280, y: 420, collected: false, name: 'Motor' },
+    { x: 620, y: 180, collected: false, name: 'Bateria' },
+    { x: 1050, y: 580, collected: false, name: 'Correia' },
+    { x: 1320, y: 480, collected: false, name: 'Carburador' }
+  ];
+  
+  // Extra items
+  batteries = [
+    { x: 480, y: 280, collected: false },
+    { x: 850, y: 480, collected: false }
+  ];
+  
+  extraFlares = [
+    { x: 580, y: 400, collected: false },
+    { x: 1000, y: 280, collected: false }
+  ];
+  
+  traps = [
+    { x: 420, y: 320, triggered: false },
+    { x: 780, y: 220, triggered: false }
+  ];
+}
+
+// ============ INPUT ============
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  AudioSystem.unlock();
+  
+  if (gameState === STATE.TITLE) {
+    if (e.code === 'ArrowUp' || e.code === 'KeyW') {
+      titleSelect = Math.max(0, titleSelect - 1);
+      AudioSystem.playTone(200, 0.05, 'square', 0.05);
+    }
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') {
+      titleSelect = Math.min(1, titleSelect + 1);
+      AudioSystem.playTone(200, 0.05, 'square', 0.05);
+    }
+    if (e.code === 'Enter' || e.code === 'Space') {
+      if (titleSelect === 0) {
+        gameState = STATE.INTRO;
+        introStep = 0;
+        introTimer = 0;
+        init();
+      }
+      AudioSystem.playTone(300, 0.1, 'square', 0.08);
+    }
+  }
+  
+  if (gameState === STATE.INTRO) {
+    if (e.code === 'Enter' || e.code === 'Space') {
+      introStep++;
+      introTimer = 0;
+      if (introStep >= 4) gameState = STATE.GAME;
+    }
+    if (e.code === 'Escape') gameState = STATE.GAME;
+  }
+  
+  if (gameState === STATE.PAUSE) {
+    if (e.code === 'Escape') gameState = STATE.GAME;
+    if (e.code === 'ArrowUp' || e.code === 'KeyW') pauseSelect = Math.max(0, pauseSelect - 1);
+    if (e.code === 'ArrowDown' || e.code === 'KeyS') pauseSelect = Math.min(2, pauseSelect + 1);
+    if (e.code === 'Enter' || e.code === 'Space') {
+      if (pauseSelect === 0) gameState = STATE.GAME;
+      else if (pauseSelect === 1) { init(); gameState = STATE.GAME; }
+      else gameState = STATE.TITLE;
+    }
+  }
+  
+  if (gameState === STATE.GAME || gameState === STATE.CHASE) {
+    if (e.code === 'Escape') {
+      gameState = STATE.PAUSE;
+      pauseSelect = 0;
+    }
+    
+    // Flare
+    if (e.code === 'KeyF' && items.flares > 0 && !flareActive) {
+      items.flares--;
+      flareActive = true;
+      flareTimer = 400;
+      flareX = player.x;
+      flareY = player.y;
+      AudioSystem.playFlare();
+      
+      let dist = Math.hypot(deer.x - player.x, deer.y - player.y);
+      if (dist < 150) {
+        deer.stunTimer = 280;
+        deer.mode = 'stunned';
+        screenShake = 15;
+      }
+    }
+    
+    // Flashlight
+    if (e.code === 'KeyL') {
+      flashlight.on = !flashlight.on;
+      AudioSystem.playTone(flashlight.on ? 280 : 180, 0.05, 'square', 0.04);
+    }
+    
+    // Interact
+    if (e.code === 'KeyE') handleInteraction();
+  }
+  
+  if (gameState === STATE.DEATH || gameState === STATE.WIN) {
+    if (e.code === 'Enter' || e.code === 'Space') {
+      gameState = STATE.TITLE;
+      titleSelect = 0;
+    }
+  }
+});
+
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+
+function handleInteraction() {
+  if (player.hiding) {
+    player.hiding = false;
+    showText('Você saiu do esconderijo');
+    return;
+  }
+  
+  // Hide spots
+  for (let hs of hideSpots) {
+    let dist = Math.hypot(player.x - (hs.x + hs.w/2), player.y - (hs.y + hs.h/2));
+    if (dist < 35) {
+      player.hiding = true;
+      player.x = hs.x + hs.w/2;
+      player.y = hs.y + hs.h/2;
+      PlayerController.vx = 0;
+      PlayerController.vy = 0;
+      showText('Escondido em ' + hs.cabin.name);
+      return;
+    }
+  }
+  
+  // Car parts
+  for (let cp of carParts) {
+    if (cp.collected) continue;
+    if (Math.hypot(player.x - cp.x, player.y - cp.y) < 30) {
+      cp.collected = true;
+      items.carParts++;
+      showText(cp.name + ' coletado! (' + items.carParts + '/' + items.totalParts + ')');
+      AudioSystem.playCollect();
+      return;
+    }
+  }
+  
+  // Batteries
+  for (let bat of batteries) {
+    if (bat.collected) continue;
+    if (Math.hypot(player.x - bat.x, player.y - bat.y) < 25) {
+      bat.collected = true;
+      flashlight.battery = Math.min(100, flashlight.battery + 45);
+      showText('Bateria coletada! +45%');
+      AudioSystem.playCollect();
+      return;
+    }
+  }
+  
+  // Extra flares
+  for (let fl of extraFlares) {
+    if (fl.collected) continue;
+    if (Math.hypot(player.x - fl.x, player.y - fl.y) < 25) {
+      fl.collected = true;
+      items.flares++;
+      showText('Sinalizador encontrado! +1');
+      AudioSystem.playCollect();
+      return;
+    }
+  }
+  
+  // Escape car
+  if (items.carParts >= items.totalParts) {
+    if (Math.hypot(player.x - escapeCar.x, player.y - escapeCar.y) < 40) {
+      gameState = STATE.WIN;
+      winTimer = 0;
+    }
+  }
+}
+
+function showText(txt) {
+  currentText = txt;
+  textTimer = 240;
+}
+
+// ============ DRAWING FUNCTIONS ============
+function drawPixelRect(x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.floor(x), Math.floor(y), w, h);
+}
+
+// ============ DRAW PLAYER (IMPROVED) ============
+function drawPlayer(sx, sy) {
+  if (player.hiding) return;
+  
+  const anim = PlayerController.getAnimationState();
+  let x = Math.floor(sx);
+  let y = Math.floor(sy + anim.bobY);
+  
+  // Invincibility flash
+  if (player.invincible > 0 && Math.floor(player.invincible / 5) % 2 === 0) {
+    ctx.globalAlpha = 0.5;
+  }
+  
+  // Shadow
+  ctx.globalAlpha = (ctx.globalAlpha || 1) * 0.4;
+  ctx.beginPath();
+  ctx.ellipse(x, y + 12, 7, 3, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#000';
+  ctx.fill();
+  ctx.globalAlpha = player.invincible > 0 && Math.floor(player.invincible / 5) % 2 === 0 ? 0.5 : 1;
+  
+  // Legs with walking animation
+  const legL = Math.sin(anim.walkCycle * 2) * (anim.isMoving ? 2 : 0);
+  const legR = -legL;
+  
+  // Left leg
+  drawPixelRect(x - 4, y + 5 + Math.abs(legL) * 0.3, 3, 6 - Math.abs(legL) * 0.2, '#1a1a2a');
+  drawPixelRect(x - 4, y + 10, 3, 2, '#2a1a0a'); // boot
+  
+  // Right leg
+  drawPixelRect(x + 1, y + 5 + Math.abs(legR) * 0.3, 3, 6 - Math.abs(legR) * 0.2, '#1a1a2a');
+  drawPixelRect(x + 1, y + 10, 3, 2, '#2a1a0a'); // boot
+  
+  // Body (mechanic jumpsuit)
+  drawPixelRect(x - 5, y - 6, 10, 12, '#1a3055');
+  drawPixelRect(x - 4, y - 5, 8, 10, '#2a4065');
+  
+  // Jumpsuit details
+  drawPixelRect(x - 1, y - 4, 2, 7, '#1a3055'); // zipper
+  drawPixelRect(x - 4, y + 2, 3, 2, '#666'); // pocket
+  drawPixelRect(x + 2, y + 2, 3, 2, '#666'); // pocket
+  
+  // Belt
+  drawPixelRect(x - 5, y + 4, 10, 2, '#3a2a1a');
+  drawPixelRect(x - 1, y + 4, 2, 2, '#aa8844'); // buckle
+  
+  // Arms with swing animation
+  const armSwing = anim.armSwing * 0.15;
+  
+  // Left arm
+  ctx.save();
+  ctx.translate(x - 5, y - 3);
+  ctx.rotate(-armSwing * 0.1);
+  drawPixelRect(-2, 0, 3, 8, '#2a4065');
+  drawPixelRect(-2, 7, 3, 2, '#d4a574'); // hand
+  ctx.restore();
+  
+  // Right arm (holds flashlight)
+  ctx.save();
+  ctx.translate(x + 5, y - 3);
+  ctx.rotate(armSwing * 0.1);
+  drawPixelRect(0, 0, 3, 8, '#2a4065');
+  drawPixelRect(0, 7, 3, 2, '#d4a574'); // hand
+  if (flashlight.on) {
+    drawPixelRect(2, 6, 5, 3, '#555'); // flashlight
+    drawPixelRect(6, 6, 2, 3, '#888'); // lens
+  }
+  ctx.restore();
+  
+  // Head
+  drawPixelRect(x - 4, y - 12, 8, 7, '#d4a574');
+  
+  // Hair
+  drawPixelRect(x - 4, y - 14, 8, 3, '#2a1a0a');
+  drawPixelRect(x - 5, y - 12, 2, 3, '#2a1a0a');
+  drawPixelRect(x + 3, y - 12, 2, 3, '#2a1a0a');
+  
+  // Face based on direction
+  if (anim.direction === 3) { // Looking up
+    drawPixelRect(x - 2, y - 9, 2, 1, '#1a0a00');
+    drawPixelRect(x + 1, y - 9, 2, 1, '#1a0a00');
+  } else if (anim.direction === 1) { // Looking down
+    drawPixelRect(x - 2, y - 8, 2, 2, '#1a0a00');
+    drawPixelRect(x + 1, y - 8, 2, 2, '#1a0a00');
+    drawPixelRect(x - 1, y - 6, 3, 1, '#c49a64'); // mouth area
+  } else { // Side view
+    const eyeOffX = anim.direction === 0 ? 1 : -1;
+    drawPixelRect(x - 2 + eyeOffX, y - 9, 2, 2, '#1a0a00');
+    drawPixelRect(x + 1 + eyeOffX, y - 9, 2, 2, '#1a0a00');
+  }
+  
+  ctx.globalAlpha = 1;
+}
+
+// ============ DRAW DEER (MECHANICAL) ============
+function drawDeer(sx, sy) {
+  let x = Math.floor(sx);
+  let y = Math.floor(sy);
+  
+  const bobY = Math.sin(deer.frame * 0.12) * 1.5;
+  
+  // Glitch effect when stunned
+  if (deer.stunTimer > 0) {
+    x += (Math.random() - 0.5) * 6;
+    y += (Math.random() - 0.5) * 4;
+  }
+  
+  y += bobY;
+  
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 20, 14, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Leg animation
+  const legAnim = Math.sin(deer.frame * 0.15) * (deer.mode === 'chase' ? 4 : 2);
+  
+  // Back legs
+  drawPixelRect(x - 12, y + 3, 4, 16, '#4a3a2a');
+  drawPixelRect(x - 12, y + 8, 4, 2, '#666');
+  drawPixelRect(x - 12, y + 13, 4, 2, '#666');
+  drawPixelRect(x + 8, y + 3, 4, 16, '#4a3a2a');
+  drawPixelRect(x + 8, y + 8, 4, 2, '#666');
+  drawPixelRect(x + 8, y + 13, 4, 2, '#666');
+  
+  // Front legs
+  drawPixelRect(x - 6, y + 5 + legAnim * 0.5, 3, 14, '#5a4a3a');
+  drawPixelRect(x - 6, y + 10 + legAnim * 0.5, 3, 2, '#888');
+  drawPixelRect(x + 3, y + 5 - legAnim * 0.5, 3, 14, '#5a4a3a');
+  drawPixelRect(x + 3, y + 10 - legAnim * 0.5, 3, 2, '#888');
+  
+  // Hooves
+  drawPixelRect(x - 12, y + 18, 4, 2, '#333');
+  drawPixelRect(x + 8, y + 18, 4, 2, '#333');
+  drawPixelRect(x - 6, y + 18 + legAnim * 0.5, 3, 2, '#444');
+  drawPixelRect(x + 3, y + 18 - legAnim * 0.5, 3, 2, '#444');
+  
+  // Body
+  drawPixelRect(x - 12, y - 4, 24, 12, '#5a3a1a');
+  drawPixelRect(x - 10, y - 3, 20, 10, '#6a4a2a');
+  
+  // Metal plates
+  drawPixelRect(x - 9, y - 2, 5, 4, '#7a5a3a');
+  drawPixelRect(x + 4, y - 2, 5, 4, '#7a5a3a');
+  drawPixelRect(x - 8, y - 1, 1, 1, '#aaa'); // rivet
+  drawPixelRect(x + 7, y - 1, 1, 1, '#aaa'); // rivet
+  
+  // Gears
+  const gearRot = (deer.frame * 0.08) % (Math.PI * 2);
+  drawPixelRect(x - 2 + Math.cos(gearRot), y + 1 + Math.sin(gearRot), 2, 2, '#888');
+  drawPixelRect(x + 1, y + 3, 2, 2, '#777');
+  
+  // Wires
+  drawPixelRect(x - 5, y + 5, 1, 2, '#cc3333');
+  drawPixelRect(x + 4, y + 5, 1, 2, '#33cc33');
+  
+  // Rust
+  drawPixelRect(x - 9, y + 4, 2, 2, '#8a4a0a');
+  drawPixelRect(x + 6, y - 2, 2, 2, '#8a4a0a');
+  
+  // Neck
+  drawPixelRect(x - 4, y - 10, 8, 7, '#5a3a1a');
+  drawPixelRect(x - 3, y - 9, 6, 5, '#6a4a2a');
+  drawPixelRect(x - 1, y - 8, 1, 3, '#777');
+  
+  // Head
+  drawPixelRect(x - 8, y - 20, 16, 11, '#5a3a1a');
+  drawPixelRect(x - 7, y - 19, 14, 9, '#6a4a2a');
+  
+  // Snout
+  drawPixelRect(x - 11, y - 16, 4, 5, '#4a2a0a');
+  drawPixelRect(x - 10, y - 13, 2, 2, '#222');
+  
+  // Metal plate on head
+  drawPixelRect(x + 2, y - 18, 5, 4, '#555');
+  
+  // Eyes
+  let eyeCol = deer.eyeColor;
+  if (deer.stunTimer > 0) {
+    eyeCol = deer.stunTimer % 8 < 4 ? '#ffffff' : '#ffff00';
+  }
+  
+  // Eye sockets
+  drawPixelRect(x - 6, y - 18, 4, 4, '#1a1a1a');
+  drawPixelRect(x + 2, y - 18, 4, 4, '#1a1a1a');
+  
+  // Glowing eyes
+  drawPixelRect(x - 5, y - 17, 3, 3, eyeCol);
+  drawPixelRect(x + 3, y - 17, 3, 3, eyeCol);
+  
+  // Eye glow
+  const glowIntensity = deer.mode === 'chase' ? 0.5 : 0.25;
+  ctx.globalAlpha = glowIntensity + Math.sin(gameTimer * 0.1) * 0.1;
+  ctx.fillStyle = eyeCol;
+  ctx.beginPath();
+  ctx.arc(x - 3.5, y - 15.5, 5, 0, Math.PI * 2);
+  ctx.arc(x + 4.5, y - 15.5, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  
+  // Antlers
+  drawPixelRect(x - 5, y - 25, 2, 6, '#555');
+  drawPixelRect(x - 8, y - 28, 2, 5, '#666');
+  drawPixelRect(x - 7, y - 28, 2, 1, '#666');
+  drawPixelRect(x - 10, y - 30, 2, 3, '#777');
+  drawPixelRect(x - 3, y - 27, 2, 3, '#666');
+  
+  drawPixelRect(x + 3, y - 25, 2, 6, '#555');
+  drawPixelRect(x + 6, y - 28, 2, 5, '#666');
+  drawPixelRect(x + 5, y - 28, 2, 1, '#666');
+  drawPixelRect(x + 8, y - 30, 2, 3, '#777');
+  drawPixelRect(x + 1, y - 27, 2, 3, '#666');
+  
+  // Antenna lights
+  if (gameTimer % 40 < 20 && deer.stunTimer <= 0) {
+    drawPixelRect(x - 10, y - 31, 2, 2, '#ff0000');
+    drawPixelRect(x + 8, y - 31, 2, 2, '#ff0000');
+  }
+  
+  // Sparks when chasing
+  if (deer.mode === 'chase' && gameTimer % 6 < 3) {
+    for (let i = 0; i < 3; i++) {
+      const sx = x + (Math.random() - 0.5) * 20;
+      const sy = y + Math.random() * 15;
+      drawPixelRect(sx, sy, 1, 1, Math.random() > 0.5 ? '#ffff44' : '#ffaa22');
+    }
+  }
+  
+  deer.frame++;
+}
+
+// ============ DRAW ENVIRONMENT ============
+function drawTree(tx, ty, h, type, sway) {
+  const x = Math.floor(tx);
+  const y = Math.floor(ty);
+  const swayOffset = Math.sin(gameTimer * 0.015 + sway) * 1.5;
+  
+  // Trunk
+  drawPixelRect(x - 2, y - h * 0.3, 5, h * 0.4, '#2a1a0a');
+  
+  if (type === 0) {
+    // Pine tree
+    for (let i = 0; i < 4; i++) {
+      const w = 5 + (4 - i) * 4;
+      const ly = y - h * 0.3 - i * (h * 0.18);
+      const layerSway = swayOffset * (i + 1) * 0.3;
+      drawPixelRect(x - w/2 + layerSway, ly - h * 0.16, w, h * 0.19, '#0a2a0a');
+      drawPixelRect(x - w/2 + 1 + layerSway, ly - h * 0.14, w - 2, h * 0.07, '#0a3a0a');
+    }
+  } else if (type === 1) {
+    // Dead tree
+    drawPixelRect(x - 6 + swayOffset, y - h * 0.6, 6, 2, '#3a2a1a');
+    drawPixelRect(x + 2 + swayOffset, y - h * 0.5, 6, 2, '#3a2a1a');
+    drawPixelRect(x - 8 + swayOffset, y - h * 0.65, 3, 2, '#3a2a1a');
+  } else {
+    // Oak tree
+    const fw = 16;
+    drawPixelRect(x - fw/2 + swayOffset * 0.5, y - h * 0.8, fw, h * 0.45, '#0a2a0a');
+    drawPixelRect(x - fw/2 + 2 + swayOffset * 0.5, y - h * 0.75, fw - 4, h * 0.25, '#0a3a0a');
+  }
+}
+
+function drawCabin(cx, cy, cw, ch) {
+  const x = Math.floor(cx);
+  const y = Math.floor(cy);
+  
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(x + 5, y + ch, cw - 3, 5);
+  
+  // Walls
+  drawPixelRect(x, y, cw, ch, '#3a2a1a');
+  drawPixelRect(x + 2, y + 2, cw - 4, ch - 4, '#4a3a2a');
+  
+  // Log lines
+  for (let i = 0; i < ch; i += 6) {
+    drawPixelRect(x, y + i, cw, 1, '#3a2a1a');
+  }
+  
+  // Roof
+  for (let i = 0; i < 12; i++) {
+    const rw = cw + 10 - i * 0.9;
+    drawPixelRect(x - 5 + i * 0.45, y - 12 + i, rw, 1, i % 2 === 0 ? '#2a1a0a' : '#3a2a1a');
+  }
+  
+  // Door
+  drawPixelRect(x + cw/2 - 6, y + ch - 22, 12, 22, '#1a0a00');
+  drawPixelRect(x + cw/2 - 5, y + ch - 21, 10, 20, '#2a1a0a');
+  drawPixelRect(x + cw/2 + 3, y + ch - 12, 2, 3, '#aa8844');
+  
+  // Window
+  drawPixelRect(x + 8, y + 10, 12, 10, '#0a1a2a');
+  drawPixelRect(x + 9, y + 11, 10, 8, '#1a2a3a');
+  drawPixelRect(x + 14, y + 11, 1, 8, '#3a2a1a');
+  drawPixelRect(x + 9, y + 15, 10, 1, '#3a2a1a');
+  
+  // Moss
+  drawPixelRect(x, y + ch - 4, 5, 4, '#1a4a1a');
+  drawPixelRect(x + cw - 6, y + ch - 5, 6, 5, '#1a4a1a');
+  
+  // Hide prompt
+  const dist = Math.hypot(player.x - (x + cw/2), player.y - (y + ch/2));
+  if (dist < 50 && !player.hiding) {
+    const alpha = 0.7 + Math.sin(gameTimer * 0.1) * 0.3;
+    ctx.globalAlpha = alpha;
+    TextRenderer.drawTextBox('[E] Esconder', x + 5, y - 18, {
+      size: 10, color: '#aaffaa', bgColor: 'rgba(0,50,0,0.7)', padding: 4
+    });
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawWorkshop(wx, wy) {
+  const x = Math.floor(wx);
+  const y = Math.floor(wy);
+  const w = 120, h = 80;
+  
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(x + 8, y + h, w - 5, 6);
+  
+  // Main structure
+  drawPixelRect(x, y, w, h, '#3a3a3a');
+  drawPixelRect(x + 2, y + 2, w - 4, h - 4, '#4a4a4a');
+  
+  // Corrugated pattern
+  for (let i = 0; i < h; i += 5) {
+    drawPixelRect(x, y + i, w, 1, '#333');
+  }
+  
+  // Rust
+  drawPixelRect(x + 12, y + 18, 6, 4, '#6a4a2a');
+  drawPixelRect(x + w - 25, y + 35, 7, 5, '#5a3a1a');
+  
+  // Roof
+  drawPixelRect(x - 4, y - 8, w + 8, 10, '#2a2a2a');
+  for (let i = 0; i < w + 8; i += 5) {
+    drawPixelRect(x - 4 + i, y - 7, 3, 8, '#333');
+  }
+  
+  // Neon sign
+  const signFlicker = Math.sin(gameTimer * 0.12) > -0.3 && Math.random() > 0.03;
+  drawPixelRect(x + 15, y - 18, 75, 14, '#111');
+  
+  if (signFlicker) {
+    TextRenderer.drawText('OFICINA E PECAS', x + 20, y - 10, {
+      size: 10, color: '#4488ff', shadow: false
+    });
+    ctx.globalAlpha = 0.25;
+    drawPixelRect(x + 14, y - 19, 77, 16, '#4488ff');
+    ctx.globalAlpha = 1;
+  } else {
+    TextRenderer.drawText('OFICINA E PECAS', x + 20, y - 10, {
+      size: 10, color: '#223344', shadow: false
+    });
+  }
+  
+  // Garage door
+  drawPixelRect(x + 35, y + h - 45, 45, 45, '#2a2a2a');
+  for (let i = 0; i < 45; i += 7) {
+    drawPixelRect(x + 35, y + h - 45 + i, 45, 1, '#1a1a1a');
+  }
+  
+  // Windows
+  drawPixelRect(x + 90, y + 15, 18, 12, '#0a1a2a');
+  drawPixelRect(x + 91, y + 16, 16, 10, '#1a2a3a');
+  if (Math.random() > 0.1) {
+    ctx.globalAlpha = 0.35;
+    drawPixelRect(x + 92, y + 17, 14, 8, '#ffcc66');
+    ctx.globalAlpha = 1;
+  }
+  
+  // Barrels
+  drawPixelRect(x - 14, y + h - 20, 10, 16, '#4a3a1a');
+  drawPixelRect(x - 14, y + h - 17, 10, 2, '#666');
+  drawPixelRect(x + w + 4, y + h - 18, 10, 14, '#3a4a3a');
+}
+
+function drawEscapeCar(cx, cy) {
+  const x = Math.floor(cx);
+  const y = Math.floor(cy);
+  
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 18, 22, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Body
+  drawPixelRect(x - 24, y - 3, 48, 14, '#3a2a1a');
+  drawPixelRect(x - 22, y - 2, 44, 12, '#4a3a2a');
+  
+  // Cabin frame
+  drawPixelRect(x - 12, y - 14, 24, 2, '#444');
+  drawPixelRect(x - 12, y - 14, 2, 12, '#444');
+  drawPixelRect(x + 10, y - 14, 2, 12, '#444');
+  drawPixelRect(x - 1, y - 14, 2, 12, '#444');
+  
+  // Hood (open)
+  drawPixelRect(x + 16, y - 16, 10, 2, '#4a3a2a');
+  drawPixelRect(x + 24, y - 15, 2, 7, '#4a3a2a');
+  
+  // Engine bay
+  drawPixelRect(x + 18, y - 7, 6, 5, '#333');
+  if (items.carParts > 0) drawPixelRect(x + 19, y - 6, 4, 3, '#666');
+  if (items.carParts > 1) drawPixelRect(x + 17, y - 4, 2, 2, '#aa3333');
+  if (items.carParts > 2) drawPixelRect(x + 21, y - 3, 2, 2, '#3333aa');
+  
+  // Wheels
+  drawPixelRect(x - 20, y + 10, 9, 9, '#111');
+  drawPixelRect(x + 11, y + 10, 9, 9, '#111');
+  drawPixelRect(x - 19, y + 11, 7, 7, '#222');
+  drawPixelRect(x + 12, y + 11, 7, 7, '#222');
+  
+  // Rust
+  drawPixelRect(x - 18, y - 5, 4, 3, '#8a4a0a');
+  drawPixelRect(x + 8, y + 4, 5, 3, '#7a3a0a');
+  
+  // Grass
+  for (let i = 0; i < 6; i++) {
+    const gx = x - 24 + i * 10;
+    drawPixelRect(gx, y + 16, 1, 3 + Math.sin(i + gameTimer * 0.03) * 1, '#1a4a1a');
+  }
+  
+  // Interact prompt
+  const dist = Math.hypot(player.x - x, player.y - y);
+  if (dist < 50 && !player.hiding) {
+    ctx.globalAlpha = 0.7 + Math.sin(gameTimer * 0.1) * 0.3;
+    if (items.carParts >= items.totalParts) {
+      TextRenderer.drawTextBox('[E] ESCAPAR!', x - 35, y - 22, {
+        size: 12, color: '#88ff88', bgColor: 'rgba(0,80,0,0.8)', padding: 5, borderColor: '#4a4'
+      });
+    } else {
+      TextRenderer.drawTextBox('Peças: ' + items.carParts + '/' + items.totalParts, x - 30, y - 20, {
+        size: 11, color: '#ff8888', bgColor: 'rgba(80,0,0,0.8)', padding: 4
+      });
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawCarPart(px, py, name) {
+  const x = Math.floor(px);
+  const y = Math.floor(py);
+  const bob = Math.sin(gameTimer * 0.08) * 2;
+  const glow = 0.35 + Math.sin(gameTimer * 0.1) * 0.2;
+  
+  // Glow
+  ctx.globalAlpha = glow;
+  ctx.fillStyle = '#ffaa22';
+  ctx.beginPath();
+  ctx.arc(x, y + bob, 10, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  
+  // Part
+  drawPixelRect(x - 5, y - 5 + bob, 10, 10, '#888');
+  drawPixelRect(x - 4, y - 4 + bob, 8, 8, '#aaa');
+  drawPixelRect(x - 3, y - 3 + bob, 6, 6, '#ccc');
+  
+  // Gear teeth
+  drawPixelRect(x - 6, y - 1 + bob, 2, 2, '#777');
+  drawPixelRect(x + 4, y - 1 + bob, 2, 2, '#777');
+  drawPixelRect(x - 1, y - 6 + bob, 2, 2, '#777');
+  drawPixelRect(x - 1, y + 4 + bob, 2, 2, '#777');
+  
+  // Sparkle
+  if (gameTimer % 50 < 10) {
+    drawPixelRect(x + 5, y - 6 + bob, 2, 2, '#fff');
+  }
+  
+  // Label
+  const dist = Math.hypot(player.x - x, player.y - y);
+  if (dist < 40) {
+    TextRenderer.drawTextBox(name + ' [E]', x - 20, y - 18, {
+      size: 10, color: '#ffdd88', bgColor: 'rgba(50,30,0,0.8)', padding: 3
+    });
+  }
+}
+
+function drawBattery(bx, by) {
+  const x = Math.floor(bx);
+  const y = Math.floor(by);
+  const bob = Math.sin(gameTimer * 0.1 + bx * 0.1) * 1.5;
+  
+  ctx.globalAlpha = 0.25;
+  drawPixelRect(x - 6, y - 6 + bob, 12, 12, '#44ff44');
+  ctx.globalAlpha = 1;
+  
+  drawPixelRect(x - 4, y - 5 + bob, 8, 10, '#333');
+  drawPixelRect(x - 3, y - 4 + bob, 6, 8, '#444');
+  drawPixelRect(x - 1, y - 6 + bob, 2, 2, '#888');
+  drawPixelRect(x - 1, y - 2 + bob, 2, 1, '#4f4');
+  drawPixelRect(x, y - 3 + bob, 1, 3, '#4f4');
+  
+  const dist = Math.hypot(player.x - x, player.y - y);
+  if (dist < 35) {
+    TextRenderer.drawTextBox('Bateria [E]', x - 25, y - 14, {
+      size: 9, color: '#88ff88', bgColor: 'rgba(0,40,0,0.8)', padding: 3
+    });
+  }
+}
+
+function drawExtraFlare(fx, fy) {
+  const x = Math.floor(fx);
+  const y = Math.floor(fy);
+  const bob = Math.sin(gameTimer * 0.09 + fx * 0.1) * 1.5;
+  
+  ctx.globalAlpha = 0.25;
+  drawPixelRect(x - 5, y - 6 + bob, 10, 12, '#ff4422');
+  ctx.globalAlpha = 1;
+  
+  drawPixelRect(x - 2, y - 6 + bob, 5, 12, '#aa2222');
+  drawPixelRect(x - 1, y - 5 + bob, 3, 10, '#cc3333');
+  drawPixelRect(x - 1, y - 8 + bob, 3, 3, '#ff6644');
+  
+  const dist = Math.hypot(player.x - x, player.y - y);
+  if (dist < 35) {
+    TextRenderer.drawTextBox('Sinalizador [E]', x - 35, y - 16, {
+      size: 9, color: '#ff8866', bgColor: 'rgba(60,20,0,0.8)', padding: 3
+    });
+  }
+}
+
+function drawTrap(tx, ty, triggered) {
+  const x = Math.floor(tx);
+  const y = Math.floor(ty);
+  
+  if (triggered) {
+    drawPixelRect(x - 5, y - 1, 10, 4, '#444');
+    drawPixelRect(x - 4, y - 4, 3, 4, '#555');
+    drawPixelRect(x + 1, y - 4, 3, 4, '#555');
+  } else {
+    drawPixelRect(x - 6, y, 12, 3, '#555');
+    drawPixelRect(x - 5, y - 3, 3, 4, '#666');
+    drawPixelRect(x + 2, y - 3, 3, 4, '#666');
+    for (let i = 0; i < 5; i++) {
+      drawPixelRect(x - 4 + i * 2, y - 1, 1, 2, '#888');
+    }
+    
+    const dist = Math.hypot(player.x - x, player.y - y);
+    if (dist < 35 && gameTimer % 25 < 15) {
+      TextRenderer.drawText('!', x - 3, y - 10, {
+        size: 14, color: '#ff4444', shadow: true, bold: true
+      });
+    }
+  }
+}
+
+function drawFlare() {
+  if (!flareActive) return;
+  
+  const fx = flareX - camera.x;
+  const fy = flareY - camera.y;
+  
+  // Scorch
+  ctx.globalAlpha = 0.4;
+  drawPixelRect(fx - 8, fy + 5, 16, 4, '#331111');
+  ctx.globalAlpha = 1;
+  
+  // Body
+  drawPixelRect(fx - 2, fy - 5, 5, 12, '#aa2222');
+  drawPixelRect(fx - 1, fy - 4, 3, 10, '#cc3333');
+  
+  // Flame
+  const time = gameTimer * 0.5;
+  for (let i = 0; i < 10; i++) {
+    const fh = 6 + Math.sin(time + i) * 2;
+    const fw = 5 - (i * 0.4) + Math.sin(time * 1.5 + i) * 1;
+    const yOff = -6 - i * 1.8;
+    
+    let col;
+    if (i < 2) col = '#ffee88';
+    else if (i < 4) col = '#ffaa44';
+    else if (i < 7) col = '#ff6622';
+    else col = '#aa2211';
+    
+    drawPixelRect(fx - fw/2, fy + yOff, fw, 2, col);
+  }
+  
+  // Sparks
+  for (let i = 0; i < 6; i++) {
+    const sx = fx + Math.sin(time + i * 2) * 10;
+    const sy = fy - 10 - Math.random() * 15;
+    drawPixelRect(sx, sy, 1, 1, ['#ff4444', '#ffaa22', '#ffff44'][Math.floor(Math.random() * 3)]);
+  }
+  
+  // Red light overlay
+  ctx.globalAlpha = 0.07 + Math.sin(gameTimer * 0.25) * 0.03;
+  ctx.fillStyle = '#ff2200';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 1;
+}
+
+function drawRain() {
+  ctx.strokeStyle = 'rgba(150, 170, 200, 0.3)';
+  ctx.lineWidth = 1;
+  for (const r of rain) {
+    ctx.beginPath();
+    ctx.moveTo(r.x, r.y);
+    ctx.lineTo(r.x - 1.5, r.y + r.len);
+    ctx.stroke();
+  }
+}
+
+function drawFogParticles() {
+  for (const f of fogParticles) {
+    const fx = f.x - camera.x;
+    const fy = f.y - camera.y;
+    if (fx < -60 || fx > W + 60 || fy < -60 || fy > H + 60) continue;
+    
+    ctx.globalAlpha = f.alpha;
+    ctx.fillStyle = '#5a6a7a';
+    ctx.beginPath();
+    ctx.arc(fx, fy, f.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawDarkness() {
+  const px = player.x - camera.x;
+  const py = player.y - camera.y - 5;
+  
+  const offCanvas = document.createElement('canvas');
+  offCanvas.width = W;
+  offCanvas.height = H;
+  const offCtx = offCanvas.getContext('2d');
+  
+  const darknessLevel = 0.86 - (lightningFlash > 0 ? lightningFlash * 0.025 : 0);
+  offCtx.fillStyle = `rgba(5, 5, 15, ${darknessLevel})`;
+  offCtx.fillRect(0, 0, W, H);
+  
+  // Flashlight
+  if (flashlight.on && !player.hiding && flashlight.battery > 0) {
+    const flicker = flashlight.battery < 20 ? (Math.random() > 0.25 ? 1 : 0.4) : 1;
+    const r = (55 + flashlight.battery * 0.25) * flicker;
+    
+    const grad = offCtx.createRadialGradient(px, py, 4, px, py, r);
+    grad.addColorStop(0, 'rgba(5, 5, 15, 0)');
+    grad.addColorStop(0.5, 'rgba(5, 5, 15, 0.2)');
+    grad.addColorStop(1, `rgba(5, 5, 15, ${darknessLevel})`);
+    
+    offCtx.globalCompositeOperation = 'destination-out';
+    offCtx.fillStyle = 'rgba(0,0,0,1)';
+    offCtx.beginPath();
+    offCtx.arc(px, py, r * 0.75, 0, Math.PI * 2);
+    offCtx.fill();
+    
+    offCtx.globalCompositeOperation = 'source-over';
+    offCtx.fillStyle = grad;
+    offCtx.beginPath();
+    offCtx.arc(px, py, r, 0, Math.PI * 2);
+    offCtx.fill();
+  }
+  
+  // Deer eyes
+  if (deer.stunTimer <= 0) {
+    const dx = deer.x - camera.x;
+    const dy = deer.y - camera.y - 15;
+    const eyeR = deer.mode === 'chase' ? 28 : 14;
+    
+    offCtx.globalCompositeOperation = 'destination-out';
+    offCtx.fillStyle = 'rgba(0,0,0,0.5)';
+    offCtx.beginPath();
+    offCtx.arc(dx, dy, eyeR, 0, Math.PI * 2);
+    offCtx.fill();
+    offCtx.globalCompositeOperation = 'source-over';
+  }
+  
+  // Flare
+  if (flareActive) {
+    const flx = flareX - camera.x;
+    const fly = flareY - camera.y;
+    const fr = 90 + Math.sin(gameTimer * 0.25) * 15;
+    
+    offCtx.globalCompositeOperation = 'destination-out';
+    offCtx.fillStyle = 'rgba(0,0,0,1)';
+    offCtx.beginPath();
+    offCtx.arc(flx, fly, fr, 0, Math.PI * 2);
+    offCtx.fill();
+    offCtx.globalCompositeOperation = 'source-over';
+    
+    const fgrad = offCtx.createRadialGradient(flx, fly, 5, flx, fly, fr);
+    fgrad.addColorStop(0, 'rgba(5, 5, 15, 0)');
+    fgrad.addColorStop(1, `rgba(5, 5, 15, ${darknessLevel})`);
+    offCtx.fillStyle = fgrad;
+    offCtx.beginPath();
+    offCtx.arc(flx, fly, fr, 0, Math.PI * 2);
+    offCtx.fill();
+  }
+  
+  ctx.drawImage(offCanvas, 0, 0);
+}
+
+function drawVHSEffect() {
+  // Scanlines
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+  for (let i = 0; i < H; i += 3) {
+    ctx.fillRect(0, i, W, 1);
+  }
+  
+  // VHS glitch
+  if (vhsGlitch > 0) {
+    for (let i = 0; i < 2; i++) {
+      const gy = Math.random() * H;
+      const gh = 2 + Math.random() * 4;
+      ctx.drawImage(canvas, 0, gy, W, gh, Math.random() * 10 - 5, gy, W, gh);
+    }
+    vhsGlitch--;
+  }
+  
+  // Random glitch
+  if (Math.random() < 0.012) {
+    vhsGlitch = Math.floor(Math.random() * 5) + 2;
+  }
+  
+  // Chromatic aberration
+  ctx.globalAlpha = 0.02;
+  ctx.fillStyle = '#ff0000';
+  ctx.fillRect(0, 0, 2, H);
+  ctx.fillStyle = '#00ffff';
+  ctx.fillRect(W - 2, 0, 2, H);
+  ctx.globalAlpha = 1;
+  
+  // Vignette
+  const vgrad = ctx.createRadialGradient(W/2, H/2, W * 0.2, W/2, H/2, W * 0.75);
+  vgrad.addColorStop(0, 'rgba(0,0,0,0)');
+  vgrad.addColorStop(1, 'rgba(0,0,0,0.5)');
+  ctx.fillStyle = vgrad;
+  ctx.fillRect(0, 0, W, H);
+  
+  // REC
+  if (gameState === STATE.GAME || gameState === STATE.CHASE) {
+    if (gameTimer % 80 < 55) {
+      ctx.fillStyle = '#cc0000';
+      ctx.beginPath();
+      ctx.arc(12, 14, 4, 0, Math.PI * 2);
+      ctx.fill();
+      TextRenderer.drawText('REC', 20, 14, { size: 10, color: '#aa0000', shadow: true });
+    }
+    
+    // Timer
+    const mins = Math.floor(gameTimer / 3600);
+    const secs = Math.floor((gameTimer / 60) % 60);
+    TextRenderer.drawText(
+      String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0'),
+      W - 45, 14,
+      { size: 10, color: '#777', shadow: true }
+    );
+  }
+}
+
+// ============ HUD ============
+function drawHUD() {
+  // Health
+  const hudY = H - 22;
+  drawPixelRect(8, hudY - 8, 75, 28, 'rgba(0,0,0,0.6)');
+  
+  TextRenderer.drawText('VIDA', 12, hudY - 2, { size: 9, color: '#aa4444', shadow: true });
+  for (let i = 0; i < player.maxHp; i++) {
+    const col = i < player.hp ? '#cc3333' : '#333';
+    drawPixelRect(12 + i * 12, hudY + 6, 10, 8, col);
+    if (i < player.hp) {
+      drawPixelRect(13 + i * 12, hudY + 7, 8, 6, '#ff4444');
+    }
+  }
+  
+  // Stamina
+  if (player.stamina < player.maxStamina) {
+    drawPixelRect(50, hudY - 2, 30, 5, '#222');
+    const stamW = (player.stamina / player.maxStamina) * 28;
+    drawPixelRect(51, hudY - 1, stamW, 3, player.stamina < 30 ? '#aaaa44' : '#44aa44');
+  }
+  
+  // Items
+  const itemY = H - 52;
+  drawPixelRect(8, itemY - 5, 130, 22, 'rgba(0,0,0,0.6)');
+  
+  TextRenderer.drawText('Sinalizadores: ' + items.flares + ' [F]', 12, itemY + 2, {
+    size: 10, color: '#ff8844', shadow: true
+  });
+  
+  const partsCol = items.carParts >= items.totalParts ? '#88ff88' : '#aaaaaa';
+  TextRenderer.drawText('Peças: ' + items.carParts + '/' + items.totalParts, 12, itemY + 14, {
+    size: 10, color: partsCol, shadow: true
+  });
+  
+  // Battery
+  const batPct = Math.floor(flashlight.battery);
+  const batCol = batPct > 50 ? '#44aa44' : (batPct > 25 ? '#aaaa44' : '#aa4444');
+  drawPixelRect(8, itemY - 25, 100, 16, 'rgba(0,0,0,0.6)');
+  TextRenderer.drawText('Lanterna [L]: ' + batPct + '%', 12, itemY - 16, {
+    size: 10, color: batCol, shadow: true
+  });
+  
+  // Alert indicator
+  if (deer.alertLevel > 0) {
+    const alertCol = deer.alertLevel > 70 ? '#ff4444' : (deer.alertLevel > 35 ? '#ffaa44' : '#ffff44');
+    
+    drawPixelRect(W/2 - 55, 8, 110, 22, 'rgba(0,0,0,0.7)');
+    TextRenderer.drawText('ALERTA: ' + Math.floor(deer.alertLevel) + '%', W/2 - 45, 15, {
+      size: 11, color: alertCol, shadow: true, bold: true
+    });
+    
+    // Alert bar
+    const alertW = (deer.alertLevel / 100) * 90;
+    drawPixelRect(W/2 - 45, 22, 90, 5, '#222');
+    drawPixelRect(W/2 - 45, 22, alertW, 5, alertCol);
+  }
+  
+  // Chase warning
+  if (deer.mode === 'chase' && gameTimer % 30 < 18) {
+    TextRenderer.drawText('!! DETECTADO !!', W/2 - 60, 42, {
+      size: 14, color: '#ff0000', shadow: true, bold: true
+    });
+  }
+  
+  // Text popup
+  if (textTimer > 0) {
+    const alpha = Math.min(1, textTimer / 50);
+    ctx.globalAlpha = alpha;
+    TextRenderer.drawTextBox(currentText, W/2 - currentText.length * 3.5, H/2 + 70, {
+      size: 12, color: '#ffffff', bgColor: 'rgba(0,0,0,0.85)', padding: 8
+    });
+    ctx.globalAlpha = 1;
+  }
+  
+  // Controls hint
+  if (gameTimer < 500) {
+    ctx.globalAlpha = Math.max(0, 1 - gameTimer / 500);
+    TextRenderer.drawText('WASD: Mover | E: Interagir | F: Sinalizador | L: Lanterna', 30, 25, {
+      size: 9, color: '#666', shadow: true
+    });
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ============ DEER AI ============
+function updateDeer() {
+  if (deer.stunTimer > 0) {
+    deer.stunTimer--;
+    deer.frame++;
+    if (deer.stunTimer <= 0) {
+      deer.mode = 'patrol';
+      deer.eyeColor = '#ffcc00';
+      deer.alertLevel = 25;
+    }
+    return;
+  }
+  
+  const dx = player.x - deer.x;
+  const dy = player.y - deer.y;
+  const dist = Math.hypot(dx, dy);
+  
+  // Flare attraction
+  if (flareActive) {
+    const flareDist = Math.hypot(deer.x - flareX, deer.y - flareY);
+    if (flareDist < 130) {
+      const fdx = flareX - deer.x;
+      const fdy = flareY - deer.y;
+      const fd = Math.hypot(fdx, fdy);
+      if (fd > 10) {
+        deer.x += (fdx / fd) * deer.speed * 0.6;
+        deer.y += (fdy / fd) * deer.speed * 0.6;
+      }
+      deer.mode = 'distracted';
+      deer.eyeColor = '#ffffff';
+      deer.frame++;
+      return;
+    }
+  }
+  
+  // Detection
+  const canSeePlayer = !player.hiding;
+  const detectionRange = flashlight.on ? 170 : 110;
+  const detectionRate = flashlight.on ? 1.8 : 0.9;
+  const sprintBonus = (keys['ShiftLeft'] || keys['ShiftRight']) && PlayerController.isMoving ? 1.4 : 1;
+  
+  if (canSeePlayer && dist < detectionRange) {
+    deer.alertLevel = Math.min(100, deer.alertLevel + detectionRate * sprintBonus);
+    deer.lastKnownX = player.x;
+    deer.lastKnownY = player.y;
+  } else {
+    deer.alertLevel = Math.max(0, deer.alertLevel - 0.35);
+  }
+  
+  // Mode transitions
+  if (deer.alertLevel >= 100 && deer.mode !== 'chase') {
+    deer.mode = 'chase';
+    deer.eyeColor = '#ff0000';
+    deer.speed = 1.15;
+    vhsGlitch = 15;
+    screenShake = 8;
+    AudioSystem.playChase();
+  }
+  
+  // Patrol
+  if (deer.mode === 'patrol') {
+    deer.eyeColor = '#ffcc00';
+    deer.speed = 0.4;
+    
+    deer.patrolTimer++;
+    if (deer.patrolTimer > 180) {
+      deer.patrolTimer = 0;
+      deer.patrolDir = Math.random() * Math.PI * 2;
+    }
+    
+    deer.x += Math.cos(deer.patrolDir) * deer.speed;
+    deer.y += Math.sin(deer.patrolDir) * deer.speed;
+    
+    if (dist > 280) {
+      deer.x += (dx / dist) * 0.1;
+      deer.y += (dy / dist) * 0.1;
+    }
+    
+    if (deer.alertLevel > 35) {
+      deer.mode = 'alert';
+      AudioSystem.playAlert();
+    }
+  }
+  
+  // Alert
+  if (deer.mode === 'alert') {
+    deer.eyeColor = '#ffaa00';
+    deer.speed = 0.6;
+    
+    const tdx = deer.lastKnownX - deer.x;
+    const tdy = deer.lastKnownY - deer.y;
+    const td = Math.hypot(tdx, tdy);
+    
+    if (td > 15) {
+      deer.x += (tdx / td) * deer.speed;
+      deer.y += (tdy / td) * deer.speed;
+    }
+    
+    if (deer.alertLevel <= 25) {
+      deer.mode = 'patrol';
+    }
+  }
+  
+  // Chase
+  if (deer.mode === 'chase') {
+    deer.eyeColor = '#ff0000';
+    deer.speed = 1.2;
+    
+    if (dist > 10) {
+      deer.x += (dx / dist) * deer.speed;
+      deer.y += (dy / dist) * deer.speed;
+    }
+    
+    // Catch player
+    if (dist < 18 && !player.hiding && player.invincible <= 0) {
+      player.hp--;
+      player.invincible = 100;
+      screenShake = 25;
+      vhsGlitch = 30;
+      AudioSystem.playDamage();
+      
+      if (player.hp <= 0) {
+        gameState = STATE.DEATH;
+        deathTimer = 0;
+      } else {
+        player.x -= (dx / dist) * 60;
+        player.y -= (dy / dist) * 60;
+        deer.mode = 'alert';
+        deer.alertLevel = 55;
+        showText('O cervo te atingiu! Vida: ' + player.hp);
+      }
+    }
+    
+    // Lose player
+    if (player.hiding) {
+      deer.alertLevel -= 1.8;
+      if (deer.alertLevel <= 0) {
+        deer.mode = 'patrol';
+        showText('O cervo perdeu você de vista...');
+      }
+    }
+    
+    if (dist > 320) {
+      deer.alertLevel -= 1;
+      if (deer.alertLevel <= 0) {
+        deer.mode = 'patrol';
+      }
+    }
+  }
+  
+  // Distracted
+  if (deer.mode === 'distracted' && !flareActive) {
+    deer.mode = 'alert';
+    deer.alertLevel = 45;
+  }
+  
+  // Bounds
+  deer.x = Math.max(25, Math.min(MAP_W - 25, deer.x));
+  deer.y = Math.max(25, Math.min(MAP_H - 25, deer.y));
+  
+  deer.frame++;
+}
+
+// ============ UPDATE GAME ============
+function updateGame() {
+  gameTimer++;
+  
+  // Player movement
+  if (!player.hiding) {
+    const moveResult = PlayerController.update(player, keys);
+    
+    // Footsteps
+    if (moveResult.isMoving) {
+      footstepTimer++;
+      const footstepInterval = moveResult.isSprinting ? 10 : 18;
+      if (footstepTimer > footstepInterval) {
+        footstepTimer = 0;
+        AudioSystem.playFootstep();
+      }
+      
+      // Sprint noise alerts deer
+      if (moveResult.isSprinting && Math.hypot(player.x - deer.x, player.y - deer.y) < 200) {
+        deer.alertLevel += 0.35;
+      }
+    }
+    
+    // Bounds
+    player.x = Math.max(10, Math.min(MAP_W - 10, player.x));
+    player.y = Math.max(10, Math.min(MAP_H - 10, player.y));
+    
+    // Tree collision
+    for (const t of trees) {
+      const td = Math.hypot(player.x - t.x, player.y - t.y);
+      if (td < 8) {
+        player.x += (player.x - t.x) / td * 3;
+        player.y += (player.y - t.y) / td * 3;
+        PlayerController.vx *= 0.5;
+        PlayerController.vy *= 0.5;
+      }
+    }
+    
+    // Building collision
+    const buildings = [...cabins, workshop];
+    for (const b of buildings) {
+      const bw = b.w || 120;
+      const bh = b.h || 80;
+      if (player.x > b.x && player.x < b.x + bw && player.y > b.y && player.y < b.y + bh) {
+        const doorX = b.x + bw / 2;
+        const doorY = b.y + bh;
+        if (!(Math.abs(player.x - doorX) < 12 && Math.abs(player.y - doorY) < 14)) {
+          const cx = b.x + bw / 2;
+          const cy = b.y + bh / 2;
+          player.x += (player.x - cx) * 0.15;
+          player.y += (player.y - cy) * 0.15;
+          PlayerController.vx *= 0.3;
+          PlayerController.vy *= 0.3;
+        }
+      }
+    }
+    
+    // Trap collision
+    for (const trap of traps) {
+      if (trap.triggered) continue;
+      if (Math.hypot(player.x - trap.x, player.y - trap.y) < 8) {
+        trap.triggered = true;
+        player.hp--;
+        player.invincible = 80;
+        screenShake = 18;
+        showText('Armadilha! Você está ferido.');
+        AudioSystem.playDamage();
+        deer.alertLevel = Math.min(100, deer.alertLevel + 50);
+        deer.lastKnownX = player.x;
+        deer.lastKnownY = player.y;
+        
+        if (player.hp <= 0) {
+          gameState = STATE.DEATH;
+          deathTimer = 0;
+        }
+      }
+    }
+  }
+  
+  // Invincibility
+  if (player.invincible > 0) player.invincible--;
+  
+  // Flashlight battery
+  if (flashlight.on) {
+    flashlight.battery -= 0.012;
+    if (flashlight.battery <= 0) {
+      flashlight.battery = 0;
+      flashlight.on = false;
+      showText('Bateria esgotada!');
+    }
+  } else {
+    flashlight.battery = Math.min(100, flashlight.battery + 0.004);
+  }
+  
+  // Flare
+  if (flareActive) {
+    flareTimer--;
+    if (flareTimer <= 0) flareActive = false;
+  }
+  
+  // Camera (smooth follow)
+  const targetCamX = player.x - W / 2;
+  const targetCamY = player.y - H / 2;
+  camera.x += (targetCamX - camera.x) * 0.08;
+  camera.y += (targetCamY - camera.y) * 0.08;
+  camera.x = Math.max(0, Math.min(MAP_W - W, camera.x));
+  camera.y = Math.max(0, Math.min(MAP_H - H, camera.y));
+  
+  // Screen shake
+  if (screenShake > 0) {
+    camera.x += (Math.random() - 0.5) * screenShake;
+    camera.y += (Math.random() - 0.5) * screenShake;
+    screenShake *= 0.88;
+    if (screenShake < 0.4) screenShake = 0;
+  }
+  
+  // Rain
+  for (const r of rain) {
+    r.y += r.speed;
+    r.x -= 0.6;
+    if (r.y > H) { r.y = -r.len; r.x = Math.random() * W; }
+    if (r.x < 0) r.x = W;
+  }
+  
+  // Fog
+  for (const f of fogParticles) {
+    f.x += f.dx;
+    if (f.x < -60) f.x = MAP_W + 60;
+    if (f.x > MAP_W + 60) f.x = -60;
+  }
+  
+  // Lightning
+  lightningTimer++;
+  if (lightningTimer > 600 + Math.random() * 900) {
+    lightningFlash = 20;
+    lightningTimer = 0;
+  }
+  if (lightningFlash > 0) lightningFlash -= 0.7;
+  
+  // Text timer
+  if (textTimer > 0) textTimer--;
+  
+  // Heartbeat
+  const deerDist = Math.hypot(player.x - deer.x, player.y - deer.y);
+  const hbInterval = Math.max(20, 70 - (200 - Math.min(200, deerDist)) * 0.3);
+  heartbeatTimer++;
+  if (heartbeatTimer > hbInterval && deerDist < 200) {
+    heartbeatTimer = 0;
+    AudioSystem.playHeartbeat();
+  }
+  
+  // Deer AI
+  updateDeer();
+  
+  // Game state
+  if (deer.mode === 'chase' && gameState === STATE.GAME) {
+    gameState = STATE.CHASE;
+  } else if (deer.mode !== 'chase' && gameState === STATE.CHASE) {
+    gameState = STATE.GAME;
+  }
+}
+
+// ============ RENDER GAME ============
+function renderGame() {
+  // Sky gradient
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, H);
+  skyGrad.addColorStop(0, '#040408');
+  skyGrad.addColorStop(1, '#080812');
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, W, H);
+  
+  // Stars
+  ctx.fillStyle = '#ffffff';
+  for (let i = 0; i < 25; i++) {
+    const sx = (i * 41 + gameTimer * 0.008) % W;
+    const sy = (i * 29) % (H * 0.35);
+    ctx.globalAlpha = 0.3 + Math.sin(gameTimer * 0.04 + i) * 0.2;
+    ctx.fillRect(Math.floor(sx), Math.floor(sy), 1, 1);
+  }
+  ctx.globalAlpha = 1;
+  
+  // Ground
+  ctx.fillStyle = '#080c08';
+  ctx.fillRect(0, -camera.y, W, MAP_H);
+  
+  // Sort entities
+  const entities = [];
+  
+  for (const t of trees) {
+    entities.push({ type: 'tree', y: t.y, data: t });
+  }
+  for (const c of cabins) {
+    entities.push({ type: 'cabin', y: c.y + c.h, data: c });
+  }
+  entities.push({ type: 'workshop', y: workshop.y + 80, data: workshop });
+  for (const cp of carParts) {
+    if (!cp.collected) entities.push({ type: 'carpart', y: cp.y, data: cp });
+  }
+  for (const bat of batteries) {
+    if (!bat.collected) entities.push({ type: 'battery', y: bat.y, data: bat });
+  }
+  for (const fl of extraFlares) {
+    if (!fl.collected) entities.push({ type: 'extraflare', y: fl.y, data: fl });
+  }
+  for (const trap of traps) {
+    entities.push({ type: 'trap', y: trap.y, data: trap });
+  }
+  entities.push({ type: 'escapecar', y: escapeCar.y + 15, data: escapeCar });
+  if (!player.hiding) {
+    entities.push({ type: 'player', y: player.y + 12, data: player });
+  }
+  entities.push({ type: 'deer', y: deer.y + 20, data: deer });
+  
+  entities.sort((a, b) => a.y - b.y);
+  
+  // Fog behind
+  drawFogParticles();
+  
+  // Render entities
+  for (const e of entities) {
+    const sx = e.data.x - camera.x;
+    const sy = e.data.y - camera.y;
+    
+    if (sx < -80 || sx > W + 80 || sy < -100 || sy > H + 50) {
+      if (e.type !== 'deer' && e.type !== 'player') continue;
+    }
+    
+    switch (e.type) {
+      case 'tree': drawTree(sx, sy, e.data.h, e.data.type, e.data.sway); break;
+      case 'cabin': drawCabin(sx, sy, e.data.w, e.data.h); break;
+      case 'workshop': drawWorkshop(sx, sy); break;
+      case 'carpart': drawCarPart(sx, sy, e.data.name); break;
+      case 'battery': drawBattery(sx, sy); break;
+      case 'extraflare': drawExtraFlare(sx, sy); break;
+      case 'trap': drawTrap(sx, sy, e.data.triggered); break;
+      case 'escapecar': drawEscapeCar(sx, sy); break;
+      case 'player': drawPlayer(sx, sy); break;
+      case 'deer': drawDeer(sx, sy); break;
+    }
+  }
+  
+  // Player hiding
+  if (player.hiding) {
+    const px = player.x - camera.x;
+    const py = player.y - camera.y;
+    drawPixelRect(px - 3, py - 1, 2, 2, '#fff');
+    drawPixelRect(px + 1, py - 1, 2, 2, '#fff');
+    drawPixelRect(px - 3, py, 1, 1, '#000');
+    drawPixelRect(px + 2, py, 1, 1, '#000');
+    
+    TextRenderer.drawTextBox('[E] Sair', px - 20, py - 15, {
+      size: 10, color: '#aaffaa', bgColor: 'rgba(0,40,0,0.8)', padding: 4
+    });
+  }
+  
+  // Flare
+  drawFlare();
+  
+  // Darkness
+  drawDarkness();
+  
+  // Rain
+  drawRain();
+  
+  // Lightning
+  if (lightningFlash > 10) {
+    ctx.globalAlpha = (lightningFlash - 10) / 10 * 0.35;
+    ctx.fillStyle = '#ccccff';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+  
+  // Low HP warning
+  if (player.hp === 1) {
+    const pulse = Math.sin(gameTimer * 0.07) * 0.5 + 0.5;
+    ctx.globalAlpha = 0.06 + pulse * 0.05;
+    ctx.fillStyle = '#ff0000';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+  
+  // HUD
+  drawHUD();
+  
+  // VHS
+  drawVHSEffect();
+}
+
+// ============ TITLE SCREEN ============
+function renderTitle() {
+  ctx.fillStyle = '#030306';
+  ctx.fillRect(0, 0, W, H);
+  
+  // Trees
+  for (let i = 0; i < 30; i++) {
+    const tx = i * 15 + Math.sin(gameTimer * 0.006 + i * 0.5) * 3;
+    const ty = 100 + Math.sin(i * 1.7) * 25;
+    const th = 45 + Math.sin(i * 2.3) * 15;
+    
+    ctx.fillStyle = '#050905';
+    ctx.fillRect(tx, ty, 4, th);
+    for (let j = 0; j < 3; j++) {
+      const tw = 12 - j * 3;
+      ctx.fillStyle = '#040804';
+      ctx.fillRect(tx - tw/2 + 2, ty - j * 14, tw, 12);
+    }
+  }
+  
+  // Deer eyes
+  const eyeX = 230 + Math.sin(gameTimer * 0.018) * 6;
+  const eyeY = 105 + Math.cos(gameTimer * 0.012) * 4;
+  const eyePulse = 0.55 + Math.sin(gameTimer * 0.055) * 0.35;
+  
+  ctx.globalAlpha = eyePulse;
+  drawPixelRect(eyeX, eyeY, 4, 4, '#ff0000');
+  drawPixelRect(eyeX + 14, eyeY, 4, 4, '#ff0000');
+  ctx.globalAlpha = eyePulse * 0.35;
+  drawPixelRect(eyeX - 4, eyeY - 4, 12, 12, '#ff0000');
+  drawPixelRect(eyeX + 10, eyeY - 4, 12, 12, '#ff0000');
+  ctx.globalAlpha = 1;
+  
+  // Title
+  TextRenderer.drawText('ECO DE METAL', W/2 - 95, 55, {
+    size: 24, color: '#667766', shadow: true, shadowOffset: 2
+  });
+  
+  // Subtitle
+  TextRenderer.drawText('SURVIVAL HORROR', W/2 - 70, 80, {
+    size: 12, color: '#aa3333', shadow: true
+  });
+  
+  // Menu
+  const menuItems = ['INICIAR JOGO', 'CRÉDITOS'];
+  for (let i = 0; i < menuItems.length; i++) {
+    const selected = i === titleSelect;
+    const y = 160 + i * 28;
+    
+    if (selected) {
+      drawPixelRect(W/2 - 70, y - 12, 140, 24, 'rgba(100, 50, 50, 0.35)');
+      TextRenderer.drawText('> ' + menuItems[i] + ' <', W/2 - 60, y, {
+        size: 14, color: '#ffffff', shadow: true, bold: true
+      });
+    } else {
+      TextRenderer.drawText(menuItems[i], W/2 - 50, y, {
+        size: 13, color: '#555555', shadow: true
+      });
+    }
+  }
+  
+  // Controls
+  TextRenderer.drawText('Setas: Navegar | ENTER: Selecionar', W/2 - 115, H - 20, {
+    size: 10, color: '#444', shadow: true
+  });
+  
+  // Fog
+  ctx.globalAlpha = 0.04;
+  for (let i = 0; i < 5; i++) {
+    const fx = Math.sin(gameTimer * 0.003 + i * 1.5) * 90 + W/2;
+    const fy = 130 + i * 14;
+    ctx.fillStyle = '#446655';
+    ctx.beginPath();
+    ctx.arc(fx, fy, 40, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  
+  // Scanlines
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+  for (let i = 0; i < H; i += 3) {
+    ctx.fillRect(0, i, W, 1);
+  }
+  
+  gameTimer++;
+}
+
+// ============ INTRO SCREEN ============
+function renderIntro() {
+  ctx.fillStyle = '#020204';
+  ctx.fillRect(0, 0, W, H);
+  
+  const vgrad = ctx.createRadialGradient(W/2, H/2, 60, W/2, H/2, 200);
+  vgrad.addColorStop(0, 'rgba(10, 10, 20, 0)');
+  vgrad.addColorStop(1, 'rgba(0, 0, 0, 0.75)');
+  ctx.fillStyle = vgrad;
+  ctx.fillRect(0, 0, W, H);
+  
+  const texts = [
+    ['Uma estrada deserta. Noite de tempestade.', 'Seu carro quebrou no meio da floresta.', 'Você encontra uma oficina abandonada...'],
+    ['O Cervo Mecânico era um guardião.', 'Criado para proteger a floresta.', 'Mas sua programação foi corrompida.'],
+    ['Encontre 4 peças para consertar o carro.', 'Sinalizadores [F] cegam a criatura.', 'Cabanas oferecem esconderijos [E].'],
+    ['Boa sorte. Você vai precisar.', '', '[ENTER para começar]']
+  ];
+  
+  if (introStep < texts.length) {
+    introTimer++;
+    const step = texts[introStep];
+    
+    for (let i = 0; i < step.length; i++) {
+      const lineDelay = i * 25;
+      const chars = Math.min(step[i].length, Math.floor((introTimer - lineDelay) / 2.5));
+      if (chars > 0) {
+        const isTitle = i === 0;
+        TextRenderer.drawText(step[i].substring(0, chars), 45, 90 + i * 28, {
+          size: isTitle ? 14 : 12,
+          color: isTitle ? '#aa6633' : '#888888',
+          shadow: true
+        });
+        
+        // Cursor
+        if (chars < step[i].length && introTimer % 25 < 15) {
+          const cursorX = 45 + chars * (isTitle ? 8.5 : 7.2);
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(cursorX, 83 + i * 28, 6, 12);
+        }
+      }
+    }
+    
+    // Skip hint
+    if (introTimer > 80 && gameTimer % 60 < 40) {
+      TextRenderer.drawText('[ENTER] Continuar | [ESC] Pular', W/2 - 100, H - 25, {
+        size: 10, color: '#444', shadow: true
+      });
+    }
+  }
+  
+  // Scanlines
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+  for (let i = 0; i < H; i += 3) {
+    ctx.fillRect(0, i, W, 1);
+  }
+  
+  gameTimer++;
+}
+
+// ============ PAUSE SCREEN ============
+function renderPause() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillRect(0, 0, W, H);
+  
+  drawPixelRect(W/2 - 70, H/2 - 60, 140, 120, '#0a0a0a');
+  drawPixelRect(W/2 - 68, H/2 - 58, 136, 116, '#151515');
+  
+  TextRenderer.drawText('PAUSADO', W/2 - 45, H/2 - 40, {
+    size: 16, color: '#aa6633', shadow: true, bold: true
+  });
+  
+  const pauseItems = ['Continuar', 'Reiniciar', 'Menu Principal'];
+  for (let i = 0; i < pauseItems.length; i++) {
+    const selected = i === pauseSelect;
+    TextRenderer.drawText((selected ? '> ' : '  ') + pauseItems[i], W/2 - 55, H/2 - 5 + i * 25, {
+      size: 12, color: selected ? '#ffffff' : '#666666', shadow: true
+    });
+  }
+  
+  gameTimer++;
+}
+
+// ============ DEATH SCREEN ============
+function renderDeath() {
+  deathTimer++;
+  
+  const r = Math.min(18, deathTimer / 8);
+  ctx.fillStyle = `rgb(${r}, 0, 0)`;
+  ctx.fillRect(0, 0, W, H);
+  
+  // Static
+  ctx.globalAlpha = 0.08;
+  for (let i = 0; i < 350; i++) {
+    const nx = Math.random() * W;
+    const ny = Math.random() * H;
+    ctx.fillStyle = `rgb(${Math.floor(Math.random() * 35)}, 0, 0)`;
+    ctx.fillRect(nx, ny, 2, 2);
+  }
+  ctx.globalAlpha = 1;
+  
+  // Deer eyes
+  if (deathTimer > 25 && deathTimer < 180) {
+    const scale = 1 + (deathTimer - 25) / 40;
+    const eyeSize = 3 * scale;
+    const eyeGap = 12 * scale;
+    const eyeY = H/2 - 30 - (deathTimer - 25) * 0.15;
+    const eyeGlow = Math.min(1, (deathTimer - 25) / 35);
+    
+    ctx.globalAlpha = eyeGlow;
+    drawPixelRect(W/2 - eyeGap/2 - eyeSize, eyeY, eyeSize, eyeSize, '#ff0000');
+    drawPixelRect(W/2 + eyeGap/2, eyeY, eyeSize, eyeSize, '#ff0000');
+    ctx.globalAlpha = eyeGlow * 0.35;
+    drawPixelRect(W/2 - eyeGap/2 - eyeSize * 2, eyeY - eyeSize, eyeSize * 4, eyeSize * 3, '#ff0000');
+    drawPixelRect(W/2 + eyeGap/2 - eyeSize, eyeY - eyeSize, eyeSize * 4, eyeSize * 3, '#ff0000');
+    ctx.globalAlpha = 1;
+  }
+  
+  if (deathTimer > 100) {
+    TextRenderer.drawText('VOCÊ MORREU', W/2 - 85, H/2 + 15, {
+      size: 22, color: '#cc0000', shadow: true, bold: true
+    });
+  }
+  
+  if (deathTimer > 180) {
+    TextRenderer.drawText('O eco do metal ecoa pela floresta...', W/2 - 130, H/2 + 50, {
+      size: 12, color: '#553333', shadow: true
+    });
+  }
+  
+  if (deathTimer > 260 && gameTimer % 55 < 35) {
+    TextRenderer.drawText('[ENTER] Tentar novamente', W/2 - 95, H/2 + 85, {
+      size: 12, color: '#555', shadow: true
+    });
+  }
+  
+  // VHS
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+  for (let i = 0; i < H; i += 3) {
+    ctx.fillRect(0, i, W, 1);
+  }
+  
+  if (Math.random() < 0.12) {
+    const gy = Math.random() * H;
+    ctx.drawImage(canvas, 0, gy, W, 6, Math.random() * 14 - 7, gy, W, 6);
+  }
+  
+  gameTimer++;
+}
+
+// ============ WIN SCREEN ============
+function renderWin() {
+  winTimer++;
+  
+  const brightness = Math.min(28, winTimer / 5);
+  ctx.fillStyle = `rgb(${brightness}, ${brightness + 10}, ${brightness + 22})`;
+  ctx.fillRect(0, 0, W, H);
+  
+  // Road lines
+  if (winTimer > 25) {
+    ctx.globalAlpha = Math.min(0.3, (winTimer - 25) / 80);
+    for (let i = 0; i < 12; i++) {
+      const ly = H - 55 - i * 12;
+      const lw = 24 - i * 1.8;
+      ctx.fillStyle = '#888';
+      ctx.fillRect(W/2 - lw/2, ly, lw, 4);
+    }
+    ctx.globalAlpha = 1;
+  }
+  
+  // Headlights
+  if (winTimer > 50) {
+    ctx.globalAlpha = Math.min(0.45, (winTimer - 50) / 70);
+    const grad = ctx.createRadialGradient(W/2, H/2 + 45, 10, W/2, H/2, 130);
+    grad.addColorStop(0, '#ffff88');
+    grad.addColorStop(1, 'rgba(255,255,136,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+  
+  // Deer eyes fading
+  if (winTimer > 120 && winTimer < 450) {
+    const fadeIn = Math.min(1, (winTimer - 120) / 45);
+    const fadeOut = winTimer > 350 ? 1 - (winTimer - 350) / 100 : 1;
+    ctx.globalAlpha = fadeIn * fadeOut * 0.45;
+    drawPixelRect(W/2 - 30, 40, 4, 3, '#ff0000');
+    drawPixelRect(W/2 - 18, 40, 4, 3, '#ff0000');
+    ctx.globalAlpha = 1;
+  }
+  
+  if (winTimer > 100) {
+    TextRenderer.drawText('VOCÊ ESCAPOU', W/2 - 90, H/2 - 20, {
+      size: 20, color: '#aaccaa', shadow: true, bold: true
+    });
+  }
+  
+  if (winTimer > 170) {
+    const time = Math.floor(gameTimer / 60);
+    TextRenderer.drawText('Tempo de fuga: ' + Math.floor(time / 60) + ':' + String(time % 60).padStart(2, '0'), W/2 - 70, H/2 + 15, {
+      size: 13, color: '#668866', shadow: true
+    });
+  }
+  
+  if (winTimer > 220) {
+    TextRenderer.drawText('O motor ruge. Os olhos vermelhos desaparecem.', W/2 - 155, H/2 + 50, {
+      size: 11, color: '#556655', shadow: true
+    });
+    TextRenderer.drawText('Mas o eco do metal nunca será esquecido...', W/2 - 145, H/2 + 70, {
+      size: 11, color: '#556655', shadow: true
+    });
+  }
+  
+  if (winTimer > 320 && gameTimer % 60 < 40) {
+    TextRenderer.drawText('[ENTER] Menu Principal', W/2 - 85, H/2 + 105, {
+      size: 12, color: '#448844', shadow: true
+    });
+  }
+  
+  // Scanlines
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.06)';
+  for (let i = 0; i < H; i += 3) {
+    ctx.fillRect(0, i, W, 1);
+  }
+  
+  gameTimer++;
+}
+
+// ============ MAIN LOOP ============
+function gameLoop() {
+  switch (gameState) {
+    case STATE.TITLE: renderTitle(); break;
+    case STATE.INTRO: renderIntro(); break;
+    case STATE.GAME:
+    case STATE.CHASE:
+      updateGame();
+      renderGame();
+      break;
+    case STATE.PAUSE: renderPause(); break;
+    case STATE.DEATH: renderDeath(); break;
+    case STATE.WIN: renderWin(); break;
+  }
+  
+  requestAnimationFrame(gameLoop);
+}
+
+// Start
+AudioSystem.init();
+gameLoop();
+</script>
+</body>
+</html>

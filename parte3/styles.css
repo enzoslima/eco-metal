@@ -1,0 +1,18 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  overflow: hidden;
+  font-family: 'Courier New', monospace;
+}
+
+canvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  border: 3px solid #050520;
+  box-shadow: 0 0 30px rgba(0, 80, 255, 0.4);
+}
